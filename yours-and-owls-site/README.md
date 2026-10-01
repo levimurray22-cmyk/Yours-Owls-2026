@@ -35,6 +35,7 @@ Edit **`settings.json`**:
 | `slideSeconds` | Seconds per slide in the slideshow |
 | `transition` | `"cut"` (lamp blinks) or `"dissolve"` (slow fade) to start with |
 | `beam` | Strength of the light beam: `0` off, `1` normal |
+| `wallPhoto` | A real photo of a wall for the slides to be projected onto: make a folder called `wall`, put the photo in it, and write e.g. `"wall/wall.jpg"`. Leave `""` for the plain dark wall. Best: a plaster or painted wall shot in a dim room, straight on |
 | `sounds.advance`, `sounds.hum` | Real projector sounds: put the audio in the `sounds` folder and write e.g. `"sounds/clunk.mp3"`. Leave `""` for the built-in sounds |
 
 ## First-time setup (once)

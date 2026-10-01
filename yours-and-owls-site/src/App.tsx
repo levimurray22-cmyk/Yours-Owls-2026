@@ -8,9 +8,10 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "re
 type Settings = {
   title: string; slideSeconds: number; transition: "cut" | "dissolve"; beam: number;
   sounds: { advance: string; hum: string };
+  wallPhoto: string;
 };
 const DEFAULT_SETTINGS: Settings = {
-  title: "YOURS & OWLS 2026", slideSeconds: 4, transition: "cut", beam: 1, sounds: { advance: "", hum: "" },
+  title: "YOURS & OWLS 2026", slideSeconds: 4, transition: "cut", beam: 1, sounds: { advance: "", hum: "" }, wallPhoto: "",
 };
 // Used when a slide's photo window can't be found automatically (measured from a Kodachrome card mount)
 const DEFAULT_WINDOW: [number, number, number, number] = [0.161, 0.269, 0.673, 0.448];
@@ -117,6 +118,12 @@ function encodeTIFF(rgba: Uint8ClampedArray, width: number, height: number) {
 // fine fabric texture for the projector screen
 const GRAIN = (() => {
   const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='1.1' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.5  0 0 0 0 0.5  0 0 0 0 0.5  0 0 0 0.55 0'/></filter><rect width='100%' height='100%' filter='url(#n)'/></svg>`;
+  return `url("data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}")`;
+})();
+
+// uneven painted plaster, for the wall
+const PLASTER = (() => {
+  const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='520' height='520'><filter id='p'><feTurbulence type='fractalNoise' baseFrequency='0.012 0.016' numOctaves='4' seed='7' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.86  0 0 0 0 0.82  0 0 0 0 0.75  0 0 0 0.9 0.05'/><feComponentTransfer><feFuncA type='linear' slope='0.55' intercept='0.45'/></feComponentTransfer></filter><rect width='100%' height='100%' fill='#c9c2b5'/><rect width='100%' height='100%' filter='url(#p)'/></svg>`;
   return `url("data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}")`;
 })();
 
@@ -566,34 +573,27 @@ export default function YoursAndOwlsSlideshow() {
     }).catch(() => showToast("Couldn't load the full-size scan"));
   };
 
-  // ─── layout: the screen, and the picture on it ─────────
+  // ─── layout: the picture, straight onto the wall ───────
   useLayoutEffect(() => { if (barRef.current) setNavH(barRef.current.offsetHeight); }, [size.w, compact, people.length]);
   const W = size.w, H = size.h;
   const CTRL_H = 120;
-  const areaL = compact ? 12 : 100, areaR = W - areaL;
-  const areaT = navH + (compact ? 16 : 26);
-  const areaB = compact ? H - CTRL_H - 40 : H - 132;
-  const SCREEN_ASPECT = 4 / 3;
-  const CASE = 0.045, BAR = 0.022;
-  const sw = Math.max(160, Math.min(areaR - areaL, (areaB - areaT) / (1 / SCREEN_ASPECT + CASE + BAR)));
-  const caseH = sw * CASE, barH = sw * BAR, sh = sw / SCREEN_ASPECT;
-  const totalH = caseH + sh + barH;
-  const sx = (W - sw) / 2, sy = areaT + Math.max(0, (areaB - areaT - totalH) / 2) + caseH;
-  const bSide = sw * 0.028, bTop = sw * 0.07, bBot = sw * 0.03;
-  const fx = sx + bSide, fy = sy + bTop, fw = sw - 2 * bSide, fh = sh - bTop - bBot;
+  const fx = compact ? 12 : 110, fw = W - fx * 2;
+  const fy = navH + (compact ? 16 : 30);
+  const fh = Math.max(120, (compact ? H - CTRL_H - 46 : H - 140) - fy);
 
-  // where a given slide lands on the screen (each one sits in the gate slightly differently)
+  // where a given slide lands on the wall (each one sits in the gate slightly differently)
   const geom = (id: number | null) => {
     const m = id === null ? undefined : meta[id];
     const ok = !!m && m !== "error";
     const win: Win = ok ? (m as any).win : DEFAULT_WINDOW;
     const imgW = ok ? (m as any).w : 1000, imgH = ok ? (m as any).h : 1018;
     const asp = (win[2] * imgW) / (win[3] * imgH);
-    const pw = Math.min(fw * 0.8, fh * 0.8 * asp), ph = pw / asp;
+    const pw = Math.min(fw * (compact ? 1 : 0.86), fh * 0.9 * asp), ph = pw / asp;
+    const bx = fx + (fw - pw) / 2, by = fy + (fh - ph) / 2;
     const q = quirksFor(id ?? 0);
-    const px = fx + (fw - pw) / 2 + q.dx * pw, py = fy + (fh - ph) / 2 - fh * 0.01 + q.dy * ph;
+    const px = bx + q.dx * pw, py = by + q.dy * ph;
     const fullW = pw / win[2], fullH = (fullW * imgH) / imgW;
-    return { ok, m, win, imgW, imgH, pw, ph, px, py, fullW, fullH, q, radius: Math.max(3, pw * 0.022) };
+    return { ok, m, win, imgW, imgH, pw, ph, bx, by, px, py, fullW, fullH, q, radius: Math.max(3, pw * 0.022) };
   };
   const cur = geom(shownId);
   const filt = `contrast(${contrast}%) brightness(${brightness}%)`;
@@ -643,21 +643,21 @@ export default function YoursAndOwlsSlideshow() {
     <div ref={rootRef} className="pb-root" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
       <style>{CSS}</style>
 
-      {/* light the room picks up from the screen */}
-      <div className={"pb-room" + (lit ? " lit" : "")}
-        style={{ left: sx - sw * 0.35, top: sy - sw * 0.25, width: sw * 1.7, height: sh * 1.7 }} />
-
-      {/* the screen */}
-      <div className="pb-case" style={{ left: sx - sw * 0.025, top: sy - caseH, width: sw * 1.05, height: caseH }} />
-      <div className={"pb-screen" + (lit ? " lit" : "")} style={{ left: sx, top: sy, width: sw, height: sh }}>
-        <div className="pb-fabric" style={{ left: bSide, top: bTop, width: fw, height: fh }}>
-          <div className="pb-fabric-lit" />
-          <div className="pb-fabric-grain" style={{ backgroundImage: GRAIN }} />
-        </div>
-      </div>
-      <div className="pb-bottombar" style={{ left: sx - sw * 0.006, top: sy + sh - 1, width: sw * 1.012, height: barH }}>
-        <div className="pb-pull" style={{ width: sw * 0.06, height: barH * 1.5, top: barH * 0.7 }} />
-      </div>
+      {/* the wall: dark, except where the projector's light falls on it */}
+      {(() => {
+        const cx = cur.bx + cur.pw / 2, cy = cur.by + cur.ph / 2;
+        const mask = `radial-gradient(ellipse ${cur.pw * 1.15}px ${cur.ph * 1.25}px at ${cx}px ${cy}px, #000 0%, rgba(0,0,0,.55) 45%, rgba(0,0,0,.12) 75%, transparent 100%)`;
+        const wall = settings.wallPhoto
+          ? { backgroundImage: `url("${settings.wallPhoto}")`, backgroundSize: "cover", backgroundPosition: "center" }
+          : { backgroundImage: `${PLASTER}, ${GRAIN}`, backgroundSize: "520px 520px, 180px 180px" };
+        return (
+          <>
+            {settings.wallPhoto && <div className="pb-wall-dim" style={wall} />}
+            <div className={"pb-wall" + (lit ? " lit" : "") + (settings.wallPhoto ? " photo" : "")}
+              style={{ ...wall, WebkitMaskImage: mask, maskImage: mask }} />
+          </>
+        );
+      })()}
 
       {/* the projected picture(s) */}
       {shownPhoto && (
@@ -698,14 +698,14 @@ export default function YoursAndOwlsSlideshow() {
 
       {/* caption, under the screen */}
       {shownPhoto && shownPhoto.caption && (
-        <div className={"pb-caption" + (lit ? " lit" : "")} style={{ top: sy + sh + barH + (compact ? 14 : 22) }}>{shownPhoto.caption}</div>
+        <div className={"pb-caption" + (lit ? " lit" : "")} style={{ top: cur.by + cur.ph + (compact ? 16 : 22) }}>{shownPhoto.caption}</div>
       )}
 
       {/* side arrows */}
-      {!compact && visible.length > 1 && sx > 80 && (
+      {!compact && visible.length > 1 && cur.bx > 80 && (
         <>
-          <button className="pb-nav" style={{ top: cur.py + cur.ph / 2, left: sx - 62 }} onClick={() => step(-1)} aria-label="Previous slide">‹</button>
-          <button className="pb-nav" style={{ top: cur.py + cur.ph / 2, left: sx + sw + 24 }} onClick={() => step(1)} aria-label="Next slide">›</button>
+          <button className="pb-nav" style={{ top: cur.by + cur.ph / 2, left: cur.bx - 66 }} onClick={() => step(-1)} aria-label="Previous slide">‹</button>
+          <button className="pb-nav" style={{ top: cur.by + cur.ph / 2, left: cur.bx + cur.pw + 28 }} onClick={() => step(1)} aria-label="Next slide">›</button>
         </>
       )}
 
@@ -875,28 +875,18 @@ const CSS = `
 .pb-root button,.pb-root input{font-family:inherit;text-transform:uppercase}
 
 /* room + screen */
-.pb-room{position:absolute;pointer-events:none;opacity:0;transition:opacity .25s ease;
-  background:radial-gradient(closest-side,rgba(255,236,210,.075),rgba(255,236,210,.025) 55%,rgba(255,236,210,0))}
-.pb-room.lit{opacity:1;transition:opacity .35s ease}
-.pb-case{position:absolute;border-radius:999px;z-index:2;
-  background:linear-gradient(180deg,#141414 0%,#3a3a3a 28%,#262626 55%,#0b0b0b 100%);
-  box-shadow:0 3px 8px rgba(0,0,0,.7)}
-.pb-screen{position:absolute;z-index:1;background:#060606;transition:background .2s}
-.pb-screen.lit{background:#0d0d0c}
-.pb-fabric{position:absolute;overflow:hidden;background:#121211;transition:background .12s}
-.pb-fabric-lit{position:absolute;inset:0;opacity:0;transition:opacity .08s linear;
-  background:radial-gradient(ellipse 62% 60% at 50% 48%,#5a5750 0%,#3d3b36 42%,#262521 72%,#1a1917 100%)}
-.pb-screen.lit .pb-fabric-lit{opacity:1;transition:opacity .14s linear}
-.pb-fabric-grain{position:absolute;inset:0;opacity:.35;mix-blend-mode:overlay}
-.pb-bottombar{position:absolute;z-index:2;border-radius:2px;
-  background:linear-gradient(180deg,#2c2c2c,#0e0e0e);box-shadow:0 2px 5px rgba(0,0,0,.8)}
-.pb-pull{position:absolute;left:50%;transform:translateX(-50%);border:2px solid #222;border-top:none;border-radius:0 0 8px 8px}
+/* the wall */
+.pb-wall-dim{position:absolute;inset:0;pointer-events:none;opacity:.07;filter:saturate(.6)}
+.pb-wall{position:absolute;inset:0;pointer-events:none;opacity:0;transition:opacity .09s linear;
+  filter:brightness(.34) sepia(.25)}
+.pb-wall.lit{opacity:1;transition:opacity .16s linear}
+.pb-wall.photo{filter:brightness(.62) sepia(.15)}
 
 /* the projected picture */
 .pb-pics{position:absolute;inset:0;z-index:3;pointer-events:none;opacity:0;transition:opacity .07s linear}
 .pb-pics.lit{opacity:1;transition:opacity .1s linear}
 .pb-proj{position:absolute;overflow:hidden;cursor:pointer;pointer-events:auto;
-  box-shadow:0 0 3px 1px rgba(255,240,220,.25),0 0 40px 10px rgba(255,238,215,.1)}
+  box-shadow:0 0 2px 1px rgba(255,240,220,.22),0 0 26px 6px rgba(255,238,215,.07)}
 .pb-proj.out{animation:pb-out 1.4s ease-in-out both;pointer-events:none}
 .pb-proj.in{animation:pb-in 1.4s ease-in-out both}
 @keyframes pb-out{from{opacity:1}to{opacity:0}}

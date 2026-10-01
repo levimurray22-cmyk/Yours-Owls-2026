@@ -73,9 +73,11 @@ for (const s of scans) {
   slides.push({ file: s.file, slug, full, screen, small, tags: s.tags.sort(), caption });
 }
 
-// 4. sounds, if any
-const SOUNDS = path.join(ROOT, "sounds");
-if (fs.existsSync(SOUNDS)) fs.cpSync(SOUNDS, path.join(OUT, "sounds"), { recursive: true });
+// 4. sounds and wall photo, if any
+for (const extra of ["sounds", "wall"]) {
+  const dir = path.join(ROOT, extra);
+  if (fs.existsSync(dir)) fs.cpSync(dir, path.join(OUT, extra), { recursive: true });
+}
 
 // 5. the slide list, the app, and the page (with a link preview from the first slide)
 const { description = "", ...appSettings } = settings;
