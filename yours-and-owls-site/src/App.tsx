@@ -9,9 +9,12 @@ type Settings = {
   title: string; slideSeconds: number; transition: "cut" | "dissolve"; beam: number;
   sounds: { advance: string; hum: string };
   wallPhoto: string;
+  musicVolume: number; musicAutoplay: boolean; musicShuffle: boolean;
 };
+type Track = { src: string; title: string };
 const DEFAULT_SETTINGS: Settings = {
   title: "YOURS & OWLS 2026", slideSeconds: 4, transition: "cut", beam: 1, sounds: { advance: "", hum: "" }, wallPhoto: "",
+  musicVolume: 0.6, musicAutoplay: true, musicShuffle: false,
 };
 // Used when a slide's photo window can't be found automatically (measured from a Kodachrome card mount)
 const DEFAULT_WINDOW: [number, number, number, number] = [0.161, 0.269, 0.673, 0.448];
@@ -160,14 +163,16 @@ export default function YoursAndOwlsSlideshow() {
   const rootRef = useRef<HTMLDivElement>(null);
   const barRef = useRef<HTMLDivElement>(null);
 
-  const [data, setData] = useState<{ settings: Settings; photos: Photo[] } | null>(null);
+  const [data, setData] = useState<{ settings: Settings; photos: Photo[]; music: Track[] } | null>(null);
   const [dataError, setDataError] = useState("");
   useEffect(() => {
     fetch("slides.json", { cache: "no-cache" })
       .then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
-      .then((j: { settings?: Partial<Settings>; slides?: SlideEntry[] }) => {
+      .then((j: { settings?: Partial<Settings>; slides?: SlideEntry[]; music?: Track[] }) => {
         const settings = { ...DEFAULT_SETTINGS, ...(j.settings || {}), sounds: { ...DEFAULT_SETTINGS.sounds, ...((j.settings && j.settings.sounds) || {}) } };
-        setData({ settings, photos: (j.slides || []).map((e, id) => ({ ...e, id })) });
+        let music = (j.music || []).slice();
+        if (settings.musicShuffle) for (let i = music.length - 1; i > 0; i--) { const k = Math.floor(Math.random() * (i + 1)); [music[i], music[k]] = [music[k], music[i]]; }
+        setData({ settings, photos: (j.slides || []).map((e, id) => ({ ...e, id })), music });
       })
       .catch(() => setDataError("Couldn't load slides.json"));
   }, []);
@@ -296,6 +301,80 @@ export default function YoursAndOwlsSlideshow() {
     const h = hum.current, c = actx.current;
     if (h && c) h.g.gain.linearRampToValueAtTime(soundOn ? (realSounds.current.hum ? 0.35 : 0.05) : 0, c.currentTime + 0.3);
   }, [soundOn]);
+
+  // ─── music: the tracks in the "music" folder, played in a loop ───
+  const music = data ? data.music : [];
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [trackIdx, setTrackIdx] = useState(0);
+  const [musicPlaying, setMusicPlaying] = useState(false);
+  const musicWanted = useRef(false);      // the visitor wants music on (survives track changes)
+  const musicStarted = useRef(false);
+  const fadeTimer = useRef<any>(null);
+  const musicVol = () => Math.max(0, Math.min(1, settings.musicVolume));
+  const fadeTo = (target: number, ms: number, done?: () => void) => {
+    const a = audioRef.current; if (!a) return;
+    clearInterval(fadeTimer.current);
+    const start = a.volume, t0 = performance.now();
+    fadeTimer.current = setInterval(() => {
+      const k = Math.min(1, (performance.now() - t0) / ms);
+      a.volume = start + (target - start) * k;
+      if (k >= 1) { clearInterval(fadeTimer.current); done && done(); }
+    }, 30);
+  };
+  const ensureAudio = () => {
+    if (!audioRef.current) {
+      const a = new Audio(); a.preload = "auto"; a.volume = 0;
+      a.addEventListener("ended", () => setTrackIdx((i) => (i + 1) % Math.max(1, musicRef.current.length)));
+      a.addEventListener("play", () => setMusicPlaying(true));
+      a.addEventListener("pause", () => setMusicPlaying(false));
+      a.addEventListener("error", () => { if (musicRef.current.length > 1) setTrackIdx((i) => (i + 1) % musicRef.current.length); });
+      audioRef.current = a;
+    }
+    return audioRef.current;
+  };
+  const musicRef = useRef<Track[]>([]);
+  musicRef.current = music;
+  const playMusic = () => {
+    if (!music.length) return;
+    const a = ensureAudio();
+    musicWanted.current = true; musicStarted.current = true;
+    if (!a.src) a.src = music[trackIdx % music.length].src;
+    a.muted = !soundRef.current;
+    const p = a.play();
+    if (p && p.catch) p.catch(() => { musicWanted.current = false; });
+    fadeTo(musicVol(), 1200);
+  };
+  const pauseMusic = () => {
+    musicWanted.current = false;
+    fadeTo(0, 500, () => audioRef.current && audioRef.current.pause());
+  };
+  const toggleMusic = () => { if (musicPlaying) pauseMusic(); else playMusic(); };
+  const nextTrack = () => { if (music.length > 1) { musicWanted.current = true; setTrackIdx((i) => (i + 1) % music.length); } };
+  // a new track: load it, keep playing if music is on
+  useEffect(() => {
+    const a = audioRef.current;
+    if (!a || !music.length) return;
+    a.src = music[trackIdx % music.length].src;
+    if (musicWanted.current) { a.volume = 0; a.play().catch(() => {}); fadeTo(musicVol(), 900); }
+    try {
+      const ms = (navigator as any).mediaSession;
+      if (ms && (window as any).MediaMetadata) {
+        ms.metadata = new (window as any).MediaMetadata({ title: music[trackIdx % music.length].title, artist: settings.title });
+        ms.setActionHandler("nexttrack", () => nextTrack());
+      }
+    } catch (e) {}
+  }, [trackIdx, music]);
+  // browsers only allow sound after the visitor does something, so music starts on their first tap or key
+  useEffect(() => {
+    if (!music.length || !settings.musicAutoplay) return;
+    const go = () => { if (!musicStarted.current && soundRef.current) playMusic(); };
+    window.addEventListener("pointerdown", go); window.addEventListener("keydown", go);
+    return () => { window.removeEventListener("pointerdown", go); window.removeEventListener("keydown", go); };
+  });
+  // the speaker button mutes everything, music included
+  useEffect(() => { if (audioRef.current) audioRef.current.muted = !soundOn; }, [soundOn]);
+  useEffect(() => () => { clearInterval(fadeTimer.current); if (audioRef.current) audioRef.current.pause(); }, []);
+  const trackTitle = music.length ? music[trackIdx % music.length].title : "";
 
   const showToast = (msg: string) => {
     setToast({ msg, show: true });
@@ -507,6 +586,8 @@ export default function YoursAndOwlsSlideshow() {
       if (e.key === "d" || e.key === "D") openPreview();
       if (e.key === "v" || e.key === "V") openTray();
       if (e.key === "f" || e.key === "F") toggleMode();
+      if (e.key === "m" || e.key === "M") toggleMusic();
+      if (e.key === "n" || e.key === "N") nextTrack();
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
@@ -726,7 +807,14 @@ export default function YoursAndOwlsSlideshow() {
             <button className="pb-action" onClick={openTray}>All</button>
             <button className="pb-action" onClick={openPreview}>Save</button>
           </div>
-          <div className="pb-hint">swipe to change slides</div>
+          {music.length > 0 ? (
+            <div className={"pb-music mobile" + (musicPlaying ? " on" : "")}>
+              <span className="pb-eq" aria-hidden="true"><i /><i /><i /></span>
+              <span className="pb-track">{trackTitle}</span>
+              <button className="pb-mbtn" onClick={toggleMusic} aria-label={musicPlaying ? "Pause music" : "Play music"}>{musicPlaying ? "❚❚" : "▶"}</button>
+              {music.length > 1 && <button className="pb-mbtn" onClick={nextTrack} aria-label="Next track">⏭︎</button>}
+            </div>
+          ) : <div className="pb-hint">swipe to change slides</div>}
         </div>
       ) : (
         <>
@@ -771,6 +859,15 @@ export default function YoursAndOwlsSlideshow() {
         </div>
         <span className="pb-count">{filters.length ? `${visible.length} / ${photos.length}` : photos.length}</span>
       </div>
+
+      {music.length > 0 && !compact && (
+        <div className={"pb-music" + (musicPlaying ? " on" : "")}>
+          <span className="pb-eq" aria-hidden="true"><i /><i /><i /></span>
+          <span className="pb-track" title={trackTitle}>{trackTitle}</span>
+          <button className="pb-mbtn" onClick={toggleMusic} aria-label={musicPlaying ? "Pause music" : "Play music"}>{musicPlaying ? "❚❚" : "▶"}</button>
+          {music.length > 1 && <button className="pb-mbtn" onClick={nextTrack} aria-label="Next track">⏭︎</button>}
+        </div>
+      )}
 
       <button className={"pb-sound" + (soundOn ? "" : " muted")} title="Toggle sound"
         onClick={() => { const on = !soundOn; setSoundOn(on); soundRef.current = on; if (on) { playTap(); startHum(); } }}>
@@ -1020,6 +1117,23 @@ const CSS = `
   display:flex;align-items:center;justify-content:center;transition:all .15s;z-index:60}
 .pb-sound:hover{color:rgba(255,255,255,.85);border-color:rgba(255,255,255,.25)}
 .pb-sound.muted{opacity:.4}
+
+/* now playing */
+.pb-music{position:absolute;top:12px;right:58px;z-index:60;height:34px;display:flex;align-items:center;gap:8px;
+  padding:0 6px 0 12px;border-radius:17px;background:rgba(10,10,10,.85);border:1px solid rgba(255,255,255,.1);
+  font-size:10px;letter-spacing:.08em;color:rgba(255,255,255,.45);max-width:min(340px,40vw)}
+.pb-music.on{color:rgba(255,255,255,.75)}
+.pb-music.mobile{position:static;height:30px;margin-top:2px;max-width:92%}
+.pb-track{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;text-transform:none}
+.pb-mbtn{flex-shrink:0;width:24px;height:24px;border-radius:50%;border:none;background:none;color:inherit;cursor:pointer;
+  font-size:10px;display:flex;align-items:center;justify-content:center}
+.pb-mbtn:hover{color:#fff;background:rgba(255,255,255,.08)}
+.pb-eq{display:flex;align-items:flex-end;gap:2px;height:10px;flex-shrink:0}
+.pb-eq i{display:block;width:2px;height:3px;background:currentColor;border-radius:1px}
+.pb-music.on .pb-eq i{animation:pb-eq .9s ease-in-out infinite}
+.pb-music.on .pb-eq i:nth-child(2){animation-delay:-.3s}
+.pb-music.on .pb-eq i:nth-child(3){animation-delay:-.6s}
+@keyframes pb-eq{0%,100%{height:3px}50%{height:10px}}
 
 .pb-loading{position:absolute;inset:0;background:#030303;z-index:500;display:flex;align-items:center;justify-content:center;
   flex-direction:column;gap:20px;opacity:1;transition:opacity .7s ease}

@@ -24,6 +24,16 @@ The scans can have a transparent or plain background — the empty margin around
 Netlify rebuilds the site by itself about a minute after each change.
 GitHub's website takes files up to 25 MB each.
 
+## Music
+
+Make a folder called **`music`** (next to `slides`) and put audio files in it — MP3 or M4A are best.
+They play in a loop, in file-name order, while people look at the slides. Start names with numbers to set the order;
+the number is left off the title shown on screen (`01 - Ocean Eyes.mp3` shows "Ocean Eyes").
+Delete a file to take it out of the playlist. Only use music you have the rights to share.
+
+Browsers don't allow sound until the visitor clicks or taps something, so the music starts on their first click.
+The speaker button mutes everything; the little player next to it pauses or skips tracks (keys: **M** play/pause, **N** next).
+
 ## Settings
 
 Edit **`settings.json`**:
@@ -36,6 +46,9 @@ Edit **`settings.json`**:
 | `transition` | `"cut"` (lamp blinks) or `"dissolve"` (slow fade) to start with |
 | `beam` | Strength of the light beam: `0` off, `1` normal |
 | `wallPhoto` | A real photo of a wall for the slides to be projected onto: make a folder called `wall`, put the photo in it, and write e.g. `"wall/wall.jpg"`. Leave `""` for the plain dark wall. Best: a plaster or painted wall shot in a dim room, straight on |
+| `musicVolume` | Music volume, `0` to `1` |
+| `musicAutoplay` | `true`: music starts on the visitor's first click. `false`: only when they press play |
+| `musicShuffle` | `true` to shuffle the playlist on each visit |
 | `sounds.advance`, `sounds.hum` | Real projector sounds: put the audio in the `sounds` folder and write e.g. `"sounds/clunk.mp3"`. Leave `""` for the built-in sounds |
 
 ## First-time setup (once)

@@ -8,5 +8,8 @@
     "advance": "",
     "hum": ""
   },
-  "wallPhoto": ""
+  "wallPhoto": "",
+  "musicVolume": 0.6,
+  "musicAutoplay": true,
+  "musicShuffle": false
 }

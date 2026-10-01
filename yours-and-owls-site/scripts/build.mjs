@@ -80,8 +80,25 @@ for (const extra of ["sounds", "wall"]) {
 }
 
 // 5. the slide list, the app, and the page (with a link preview from the first slide)
+// the playlist: every audio file in "music", in file-name order.
+// The title is the file name without its number, e.g. "01 - Ocean Eyes.mp3" → "Ocean Eyes"
+const MUSIC = path.join(ROOT, "music");
+const AUDIO = /\.(mp3|m4a|aac|ogg|oga|opus|wav|flac)$/i;
+const music = [];
+if (fs.existsSync(MUSIC)) {
+  fs.mkdirSync(path.join(OUT, "music"), { recursive: true });
+  const files = fs.readdirSync(MUSIC).filter((f) => AUDIO.test(f) && !f.startsWith("."))
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }));
+  for (const f of files) {
+    fs.copyFileSync(path.join(MUSIC, f), path.join(OUT, "music", f));
+    const name = f.replace(AUDIO, "");
+    const title = name.replace(/^\s*\d+\s*([-–._)]\s*)?/, "").trim() || name;
+    music.push({ src: "music/" + encodeURIComponent(f), title });
+  }
+}
+
 const { description = "", ...appSettings } = settings;
-fs.writeFileSync(path.join(OUT, "slides.json"), JSON.stringify({ settings: appSettings, slides }, null, 1));
+fs.writeFileSync(path.join(OUT, "slides.json"), JSON.stringify({ settings: appSettings, slides, music }, null, 1));
 fs.copyFileSync(path.join(ROOT, "app", "app.js"), path.join(OUT, "app.js"));
 const site = (process.env.URL || "").replace(/\/$/, "");
 const first = slides[0];
@@ -93,5 +110,6 @@ const html = fs.readFileSync(path.join(ROOT, "index.html"), "utf8")
   .replaceAll("__ICON__", first ? esc(first.small) : "");
 fs.writeFileSync(path.join(OUT, "index.html"), html);
 
-console.log(`Built ${slides.length} slide${slides.length === 1 ? "" : "s"} into dist/`);
+console.log(`Built ${slides.length} slide${slides.length === 1 ? "" : "s"} and ${music.length} music track${music.length === 1 ? "" : "s"} into dist/`);
+for (const m of music) console.log(`  ♪ ${m.title}`);
 for (const s of slides) console.log(`  ${s.file}  →  ${s.tags.join(", ") || "(no tags)"}${s.caption ? `  ·  "${s.caption}"` : ""}`);
