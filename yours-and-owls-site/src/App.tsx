@@ -11,18 +11,20 @@ type Settings = {
   sounds: { advance: string; hum: string };
   wallPhoto: string;
   musicVolume: number; musicAutoplay: boolean; musicShuffle: boolean;
+  photographer: string; jams: boolean;
 };
 type Track = { src: string; title: string };
 const DEFAULT_SETTINGS: Settings = {
   title: "YOURS & OWLS 2026", slideSeconds: 4, beam: 1, sounds: { advance: "", hum: "" }, wallPhoto: "",
   musicVolume: 0.6, musicAutoplay: true, musicShuffle: false,
+  photographer: "", jams: true,
 };
 // Used when a slide's photo window can't be found automatically (measured from a Kodachrome card mount)
 const DEFAULT_WINDOW: [number, number, number, number] = [0.161, 0.269, 0.673, 0.448];
 
 type Win = [number, number, number, number];
-type Photo = { id: number; file: string; slug: string; full: string; screen: string; small: string; tags: string[]; caption: string; window?: Win };
-type SlideEntry = { file: string; slug: string; full: string; screen: string; small: string; tags: string[]; caption: string; window?: Win };
+type SlideEntry = { file: string; slug: string; full: string; screen: string; small: string; tags: string[]; caption: string; window?: Win; og?: string };
+type Photo = SlideEntry & { id: number };
 type Meta = { src: string; w: number; h: number; win: Win } | "error" | undefined;
 
 // Load with CORS first (needed for downloads); fall back to a plain load so it still displays
@@ -52,34 +54,77 @@ function detectWindow(img: HTMLImageElement): Win | null {
   }
 }
 
-// Baseline uncompressed RGB TIFF
-function encodeTIFF(rgba: Uint8ClampedArray, width: number, height: number) {
+// Who took it, saved inside downloaded files (shows under "Get Info" / "Properties" and in photo apps)
+type Credit = { description: string; artist: string; copyright: string };
+const textTags = (c: Credit): [number, string][] =>
+  ([[0x010e, c.description], [0x013b, c.artist], [0x8298, c.copyright]] as [number, string][]).filter(([, v]) => v);
+
+// A little-endian TIFF directory. `entries` are [tag, type, count, value-or-bytes]; values that
+// don't fit in 4 bytes are written after the directory. `base` = where the directory starts.
+type IfdEntry = [number, number, number, number | Uint8Array];
+function writeIFD(entries: IfdEntry[], base: number) {
+  entries = entries.slice().sort((a, b) => a[0] - b[0]);
+  const dirLen = 2 + entries.length * 12 + 4;
+  let extra = 0;
+  for (const e of entries) if (e[3] instanceof Uint8Array && e[3].length > 4) extra += e[3].length + (e[3].length & 1);
+  const out = new Uint8Array(dirLen + extra), v = new DataView(out.buffer);
+  v.setUint16(0, entries.length, true);
+  let p = 2, q = dirLen;
+  for (const [tag, type, count, val] of entries) {
+    v.setUint16(p, tag, true); v.setUint16(p + 2, type, true); v.setUint32(p + 4, count, true);
+    if (val instanceof Uint8Array) {
+      if (val.length <= 4) out.set(val, p + 8);
+      else { v.setUint32(p + 8, base + q, true); out.set(val, q); q += val.length + (val.length & 1); }
+    } else if (type === 3 && count === 1) v.setUint16(p + 8, val, true);
+    else v.setUint32(p + 8, val, true);
+    p += 12;
+  }
+  v.setUint32(p, 0, true);
+  return out;
+}
+const ascii = (t: string) => { const b = new TextEncoder().encode(t); const z = new Uint8Array(b.length + 1); z.set(b); return z; };
+const u16s = (...n: number[]) => { const b = new Uint8Array(n.length * 2); const v = new DataView(b.buffer); n.forEach((x, i) => v.setUint16(i * 2, x, true)); return b; };
+const u32s = (...n: number[]) => { const b = new Uint8Array(n.length * 4); const v = new DataView(b.buffer); n.forEach((x, i) => v.setUint32(i * 4, x, true)); return b; };
+
+// Baseline uncompressed RGB TIFF, with the credit in it
+function encodeTIFF(rgba: Uint8ClampedArray, width: number, height: number, credit: Credit) {
   const rgb = new Uint8Array(width * height * 3);
   for (let i = 0; i < width * height; i++) {
     rgb[i * 3] = rgba[i * 4]; rgb[i * 3 + 1] = rgba[i * 4 + 1]; rgb[i * 3 + 2] = rgba[i * 4 + 2];
   }
-  const N = 11, HDR = 8, IFD = 2 + N * 12 + 4, BPS = HDR + IFD, XRES = BPS + 6, YRES = XRES + 8, IMG = YRES + 8;
-  const buf = new ArrayBuffer(IMG + rgb.byteLength);
-  const v = new DataView(buf);
-  v.setUint16(0, 0x4949, true); v.setUint16(2, 42, true); v.setUint32(4, HDR, true);
-  let p = HDR;
-  v.setUint16(p, N, true); p += 2;
-  const ifd = (tag: number, type: number, count: number, val: number) => {
-    v.setUint16(p, tag, true); v.setUint16(p + 2, type, true);
-    v.setUint32(p + 4, count, true);
-    if (type === 3 && count === 1) v.setUint16(p + 8, val, true); else v.setUint32(p + 8, val, true);
-    p += 12;
-  };
-  ifd(256, 4, 1, width); ifd(257, 4, 1, height); ifd(258, 3, 3, BPS);
-  ifd(259, 3, 1, 1); ifd(262, 3, 1, 2); ifd(273, 4, 1, IMG);
-  ifd(277, 3, 1, 3); ifd(278, 4, 1, height); ifd(279, 4, 1, rgb.byteLength);
-  ifd(282, 5, 1, XRES); ifd(283, 5, 1, YRES);
-  v.setUint32(p, 0, true);
-  v.setUint16(BPS, 8, true); v.setUint16(BPS + 2, 8, true); v.setUint16(BPS + 4, 8, true);
-  v.setUint32(XRES, 72, true); v.setUint32(XRES + 4, 1, true);
-  v.setUint32(YRES, 72, true); v.setUint32(YRES + 4, 1, true);
-  new Uint8Array(buf, IMG).set(rgb);
+  const tags = (imgAt: number): IfdEntry[] => [
+    [256, 4, 1, width], [257, 4, 1, height], [258, 3, 3, u16s(8, 8, 8)], [259, 3, 1, 1], [262, 3, 1, 2],
+    [273, 4, 1, imgAt], [277, 3, 1, 3], [278, 4, 1, height], [279, 4, 1, rgb.byteLength],
+    [282, 5, 1, u32s(72, 1)], [283, 5, 1, u32s(72, 1)], [296, 3, 1, 2],
+    ...textTags(credit).map(([t, v]) => { const b = ascii(v); return [t, 2, b.length, b] as IfdEntry; }),
+  ];
+  const dirLen = writeIFD(tags(0), 8).length;
+  const imgAt = 8 + dirLen;
+  const dir = writeIFD(tags(imgAt), 8);
+  const buf = new Uint8Array(imgAt + rgb.byteLength), v = new DataView(buf.buffer);
+  v.setUint16(0, 0x4949, true); v.setUint16(2, 42, true); v.setUint32(4, 8, true);
+  buf.set(dir, 8); buf.set(rgb, imgAt);
   return new Blob([buf], { type: "image/tiff" });
+}
+
+// Adds an EXIF block with the credit to a JPEG made by the browser
+async function addJpegCredit(jpeg: Blob, credit: Credit): Promise<Blob> {
+  const tags = textTags(credit);
+  if (!tags.length) return jpeg;
+  const src = new Uint8Array(await jpeg.arrayBuffer());
+  if (src[0] !== 0xff || src[1] !== 0xd8) return jpeg;
+  const dir = writeIFD(tags.map(([t, v]) => { const b = ascii(v); return [t, 2, b.length, b] as IfdEntry; }), 8);
+  const tiff = new Uint8Array(8 + dir.length), tv = new DataView(tiff.buffer);
+  tv.setUint16(0, 0x4949, true); tv.setUint16(2, 42, true); tv.setUint32(4, 8, true); tiff.set(dir, 8);
+  const body = new Uint8Array(6 + tiff.length);
+  body.set([0x45, 0x78, 0x69, 0x66, 0, 0]); body.set(tiff, 6);           // "Exif\0\0"
+  if (body.length + 2 > 0xffff) return jpeg;
+  const seg = new Uint8Array(4 + body.length);
+  seg[0] = 0xff; seg[1] = 0xe1; seg[2] = (body.length + 2) >> 8; seg[3] = (body.length + 2) & 0xff; seg.set(body, 4);
+  // goes after the JFIF header if there is one, otherwise straight after the start marker
+  let at = 2;
+  if (src[2] === 0xff && src[3] === 0xe0) at = 4 + ((src[4] << 8) | src[5]);
+  return new Blob([src.slice(0, at), seg, src.slice(at)], { type: "image/jpeg" });
 }
 
 // fine fabric texture for the projector screen
@@ -156,6 +201,12 @@ export default function YoursAndOwlsSlideshow() {
   const [shownId, setShownId] = useState<number | null>(null);
   const [lit, setLit] = useState(false);
   const [playing, setPlaying] = useState(false);
+  const [shuffle, setShuffle] = useState(false);
+  // event mode (…/#show): full screen, no buttons, the slideshow on a loop
+  const [show, setShow] = useState(() => { try { return /^#show\b/i.test(window.location.hash); } catch (e) { return false; } });
+  const [showWaiting, setShowWaiting] = useState(show);    // waiting for the first click (browsers need one for sound and full screen)
+  const [showUi, setShowUi] = useState(false);              // the little exit button, shown while the mouse moves
+  const [jam, setJam] = useState(false);                    // a slide went in upside down
   const [preview, setPreview] = useState(false);
   const [tray, setTray] = useState(false);
   const [contrast, setContrast] = useState(100);
@@ -443,8 +494,25 @@ export default function YoursAndOwlsSlideshow() {
     if (!intro) { playShutter(); setLit(false); }
     at(intro ? 120 : 240, () => playClunk());
     const on = intro ? 520 : 600;
+    // every so often a slide goes in upside down, and gets pulled out and put back the right way
+    changes.current++;
+    const jammed = !intro && settings.jams && changes.current - lastJam.current > 12 && changes.current > 3 && Math.random() < 1 / 30;
+    if (forceJam.current && !intro) { forceJam.current = false; return runJam(targetId, at, release, on); }
+    if (jammed) return runJam(targetId, at, release, on);
     at(on, () => { setShownId(targetId); setLit(true); playLamp(); });
     release(on + 160);
+    return true;
+  };
+  const changes = useRef(0), lastJam = useRef(-99), forceJam = useRef(false);
+  const runJam = (targetId: number, at: (ms: number, fn: () => void) => void, release: (ms: number) => void, on: number) => {
+    lastJam.current = changes.current;
+    at(on, () => { setJam(true); setShownId(targetId); setLit(true); playLamp(); });
+    const fix = on + 1700;
+    at(fix, () => { playShutter(); setLit(false); });
+    at(fix + 180, () => playClunk(0.7));
+    at(fix + 420, () => playClunk(0.9));
+    at(fix + 760, () => { setJam(false); setLit(true); playLamp(); });
+    release(fix + 920);
     return true;
   };
   const firstLoaded = (list: Photo[]) => list.findIndex((p) => metaRef.current[p.id] !== "error");
@@ -468,10 +536,32 @@ export default function YoursAndOwlsSlideshow() {
     if (busy.current) { clearTimers(); busy.current = false; pending.current = 0; }
     showIdx(j);
   };
+  // shuffle: a shuffled run through every slide before any repeats; back retraces your steps
+  const shuffleQueue = useRef<number[]>([]);
+  const shuffleBack = useRef<number[]>([]);
+  useEffect(() => { shuffleQueue.current = []; shuffleBack.current = []; }, [visible, shuffle]);
   const step = (dir: 1 | -1) => {
     const n = visible.length;
     if (!n) return;
     if (busy.current) { pending.current = dir; return; }
+    if (shuffle && n > 2) {
+      const ok = (j: number) => j !== curIdx && metaRef.current[visible[j].id] !== "error";
+      if (dir === -1) {
+        while (shuffleBack.current.length) { const j = shuffleBack.current.pop()!; if (ok(j)) { showIdx(j); return; } }
+      } else {
+        for (let tries = 0; tries < 2; tries++) {
+          if (!shuffleQueue.current.length) {
+            const all = visible.map((_, j) => j).filter((j) => j !== curIdx);
+            for (let i = all.length - 1; i > 0; i--) { const k = Math.floor(Math.random() * (i + 1)); [all[i], all[k]] = [all[k], all[i]]; }
+            shuffleQueue.current = all;
+          }
+          while (shuffleQueue.current.length) {
+            const j = shuffleQueue.current.shift()!;
+            if (ok(j)) { shuffleBack.current.push(curIdx); if (shuffleBack.current.length > 200) shuffleBack.current.shift(); showIdx(j); return; }
+          }
+        }
+      }
+    }
     for (let s = 1; s <= n; s++) {
       const j = (((curIdx + dir * s) % n) + n) % n;
       if (j === curIdx) return;
@@ -506,14 +596,15 @@ export default function YoursAndOwlsSlideshow() {
   }, [filters]);
 
   // keep the address bar pointing at the slide on screen, so it can be shared
+  // shared links go to the slide's own little page (…/s/022/), which shows its photo in link previews
   const slideLink = (id: number) => {
-    const tag = "#slide-" + encodeURIComponent(photos[id].slug);
-    try { return window.location.href.split("#")[0] + tag; } catch (e) { return tag; }
+    const page = "s/" + encodeURIComponent(photos[id].slug) + "/";
+    try { return new URL(page, window.location.origin + "/").href; } catch (e) { return page; }
   };
   useEffect(() => {
-    if (shownId === null) return;
+    if (shownId === null || show) return;
     try { window.history.replaceState(null, "", "#slide-" + encodeURIComponent(photos[shownId].slug)); } catch (e) {}
-  }, [shownId]);
+  }, [shownId, show]);
 
   const toggleFilter = (name: string) => {
     if (name === "ALL") setFilters([]);
@@ -523,11 +614,47 @@ export default function YoursAndOwlsSlideshow() {
 
   // slideshow (pauses while the preview or the tray view is open)
   useEffect(() => {
-    if (!playing || preview || tray || shownId === null) return;
+    if (!playing || preview || tray || shownId === null || jam || showWaiting) return;
     const t = setTimeout(() => step(1), settings.slideSeconds * 1000);
     return () => clearTimeout(t);
-  }, [playing, preview, tray, shownId, curIdx, visible]);
+  }, [playing, preview, tray, shownId, curIdx, visible, jam, showWaiting, shuffle]);
   const togglePlay = () => { setPlaying((p) => !p); playTap(); };
+  const toggleShuffle = () => { setShuffle((v) => { showToast(v ? "Shuffle off" : "Shuffle on"); return !v; }); playTap(); };
+
+  // ─── event mode ───
+  const wasFull = useRef(false);
+  const goFullscreen = () => {
+    try { const el: any = document.documentElement; const f = el.requestFullscreen || el.webkitRequestFullscreen; if (f && !document.fullscreenElement) f.call(el); } catch (e) {}
+  };
+  const startShow = () => {
+    setShow(true); setShowWaiting(false); setPreview(false); setTray(false);
+    goFullscreen(); startHum();
+    if (music.length && !musicPlaying) playMusic();
+    setPlaying(true);
+    try { window.history.replaceState(null, "", "#show"); } catch (e) {}
+  };
+  const exitShow = () => {
+    setShow(false); setShowWaiting(false); setShowUi(false); setPlaying(false);
+    try { if (document.fullscreenElement) document.exitFullscreen(); } catch (e) {}
+    playTap();
+  };
+  // pressing Esc in full screen leaves full screen; take that as leaving event mode too
+  useEffect(() => {
+    const onFs = () => {
+      if (document.fullscreenElement) wasFull.current = true;
+      else if (wasFull.current) { wasFull.current = false; setShow((on) => { if (on) { setShowUi(false); setPlaying(false); } return false; }); }
+    };
+    document.addEventListener("fullscreenchange", onFs);
+    return () => document.removeEventListener("fullscreenchange", onFs);
+  }, []);
+  // in event mode the cursor and exit button hide until the mouse moves
+  useEffect(() => {
+    if (!show || showWaiting) return;
+    let t: any;
+    const wake = () => { setShowUi(true); clearTimeout(t); t = setTimeout(() => setShowUi(false), 2500); };
+    window.addEventListener("mousemove", wake);
+    return () => { window.removeEventListener("mousemove", wake); clearTimeout(t); };
+  }, [show, showWaiting]);
 
   const openPreview = () => { if (shownId === null) return; setPreview(true); playTap(); };
   const closePreview = () => { setPreview(false); playTap(); };
@@ -542,12 +669,25 @@ export default function YoursAndOwlsSlideshow() {
       else showToast(url);
     } catch (e) { showToast(url); }
   };
-  const onPictureTap = () => { if (playing) { setPlaying(false); showToast("Slideshow paused"); } else step(1); };
+  const onPictureTap = () => {
+    if (show) return;
+    if (playing) { setPlaying(false); showToast("Slideshow paused"); } else step(1);
+  };
 
   // keyboard
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement) return;
+      if (showWaiting) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); startShow(); } return; }
+      if (show) {
+        if (e.key === "Escape") exitShow();
+        if (e.key === "ArrowRight") step(1);
+        if (e.key === "ArrowLeft") step(-1);
+        if (e.key === "m" || e.key === "M") toggleMusic();
+        if (e.key === "n" || e.key === "N") nextTrack();
+        if (e.key === "s" || e.key === "S") toggleShuffle();
+        return;
+      }
       if (preview) { if (e.key === "Escape") closePreview(); return; }
       if (tray) { if (e.key === "Escape") closeTray(); return; }
       if (e.key === "ArrowRight") step(1);
@@ -555,6 +695,9 @@ export default function YoursAndOwlsSlideshow() {
       if (e.key === " ") { e.preventDefault(); togglePlay(); }
       if (e.key === "d" || e.key === "D") openPreview();
       if (e.key === "v" || e.key === "V") openTray();
+      if (e.key === "s" || e.key === "S") toggleShuffle();
+      if (e.key === "e" || e.key === "E") startShow();
+      if (e.code === "KeyJ" && e.altKey) { forceJam.current = true; step(1); }    // try out the jammed slide
       if (e.key === "m" || e.key === "M") toggleMusic();
       if (e.key === "n" || e.key === "N") nextTrack();
     };
@@ -603,6 +746,16 @@ export default function YoursAndOwlsSlideshow() {
     a.href = u; a.download = name; document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(u), 60000);
   };
+  // e.g. artist "Levi Murray", copyright "Copyright 2026 Levi Murray", description "YOURS & OWLS 2026 - North Stage 9.40pm"
+  const creditFor = (p: Photo): Credit => {
+    const who = (settings.photographer || "").trim();
+    const year = (settings.title.match(/\b(19|20)\d\d\b/) || [String(new Date().getFullYear())])[0];
+    return {
+      description: [settings.title, p.caption].filter(Boolean).join(" - "),
+      artist: who,
+      copyright: who ? `Copyright ${year} ${who}. All rights reserved.` : "",
+    };
+  };
   const download = (kind: "jpeg" | "tiff") => {
     if (!shownPhoto) return;
     const p = shownPhoto;
@@ -616,8 +769,12 @@ export default function YoursAndOwlsSlideshow() {
       setTimeout(() => {
         try {
           const { canvas, data } = renderFull(r);
-          if (kind === "jpeg") canvas.toBlob((b) => { if (b) { save(b, base + ".jpg"); showToast("Downloaded ✓"); } }, "image/jpeg", 0.96);
-          else { save(encodeTIFF(data.data, canvas.width, canvas.height), base + ".tif"); showToast("Downloaded ✓"); }
+          const credit = creditFor(p);
+          if (kind === "jpeg") canvas.toBlob((b) => {
+            if (!b) return;
+            addJpegCredit(b, credit).catch(() => b).then((out) => { save(out, base + ".jpg"); showToast("Downloaded ✓"); });
+          }, "image/jpeg", 0.96);
+          else { save(encodeTIFF(data.data, canvas.width, canvas.height, credit), base + ".tif"); showToast("Downloaded ✓"); }
         } catch (e) { showToast("Couldn't read the scan"); }
       }, 40);
     }).catch(() => showToast("Couldn't load the full-size scan"));
@@ -627,9 +784,9 @@ export default function YoursAndOwlsSlideshow() {
   useLayoutEffect(() => { if (barRef.current) setNavH(barRef.current.offsetHeight); }, [size.w, compact, people.length]);
   const W = size.w, H = size.h;
   const CTRL_H = 120;
-  const fx = compact ? 12 : 110, fw = W - fx * 2;
-  const fy = navH + (compact ? 16 : 30);
-  const fh = Math.max(120, (compact ? H - CTRL_H - 46 : H - 140) - fy);
+  const fx = show ? (compact ? 8 : 40) : compact ? 12 : 110, fw = W - fx * 2;
+  const fy = show ? (compact ? 12 : 28) : navH + (compact ? 16 : 30);
+  const fh = Math.max(120, (show ? H - (compact ? 50 : 70) : compact ? H - CTRL_H - 46 : H - 140) - fy);
 
   // where a given slide lands on the wall (each one sits in the gate slightly differently)
   const geom = (id: number | null) => {
@@ -638,7 +795,7 @@ export default function YoursAndOwlsSlideshow() {
     const win: Win = ok ? (m as any).win : DEFAULT_WINDOW;
     const imgW = ok ? (m as any).w : 1000, imgH = ok ? (m as any).h : 1018;
     const asp = (win[2] * imgW) / (win[3] * imgH);
-    const pw = Math.min(fw * (compact ? 1 : 0.86), fh * 0.9 * asp), ph = pw / asp;
+    const pw = Math.min(fw * (compact || show ? 1 : 0.86), fh * (show ? 0.96 : 0.9) * asp), ph = pw / asp;
     const bx = fx + (fw - pw) / 2, by = fy + (fh - ph) / 2;
     const q = quirksFor(id ?? 0);
     const px = bx + q.dx * pw, py = by + q.dy * ph;
@@ -664,8 +821,8 @@ export default function YoursAndOwlsSlideshow() {
     const g = id === shownId ? cur : geom(id);
     const p = photos[id];
     return (
-      <div key={key} className={"pb-proj " + cls} onClick={onPictureTap} title={playing ? "Pause" : "Next slide"}
-        style={{ left: g.px, top: g.py, width: g.pw, height: g.ph, borderRadius: g.radius, transform: `rotate(${g.q.rot}deg)` }}>
+      <div key={key} className={"pb-proj " + cls + (jam && id === shownId ? " jammed" : "")} onClick={onPictureTap} title={show ? undefined : playing ? "Pause" : "Next slide"}
+        style={{ left: g.px, top: g.py, width: g.pw, height: g.ph, borderRadius: g.radius, transform: `rotate(${g.q.rot + (jam && id === shownId ? 180 : 0)}deg)` }}>
         <div className={"pb-proj-in" + (g.q.soft ? " soft" : "")}>
           {g.ok ? (
             <img src={(g.m as any).src} alt={p.tags.join(", ")} draggable={false}
@@ -690,7 +847,7 @@ export default function YoursAndOwlsSlideshow() {
 
   // ─── render ───────────────────────────────────────────
   return (
-    <div ref={rootRef} className="pb-root" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
+    <div ref={rootRef} className={"pb-root" + (show ? " show" : "") + (show && !showUi && !showWaiting ? " idle" : "")} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
       <style>{CSS}</style>
 
       {/* the wall: dark, except where the projector's light falls on it */}
@@ -751,7 +908,7 @@ export default function YoursAndOwlsSlideshow() {
       )}
 
       {/* side arrows */}
-      {!compact && visible.length > 1 && cur.bx > 80 && (
+      {!show && !compact && visible.length > 1 && cur.bx > 80 && (
         <>
           <button className="pb-nav" style={{ top: cur.by + cur.ph / 2, left: cur.bx - 66 }} onClick={() => step(-1)} aria-label="Previous slide">‹</button>
           <button className="pb-nav" style={{ top: cur.by + cur.ph / 2, left: cur.bx + cur.pw + 28 }} onClick={() => step(1)} aria-label="Next slide">›</button>
@@ -759,7 +916,7 @@ export default function YoursAndOwlsSlideshow() {
       )}
 
       {/* controls */}
-      {compact ? (
+      {show ? null : compact ? (
         <div className="pb-ctrl compact" style={{ top: H - CTRL_H - 4 }}>
           <div className="pb-row">
             <button className="pb-round" onClick={() => step(-1)} aria-label="Previous slide">‹</button>
@@ -771,6 +928,7 @@ export default function YoursAndOwlsSlideshow() {
           </div>
           <div className="pb-row tight">
             <button className={"pb-action" + (playing ? " on" : "")} onClick={togglePlay}>{playing ? "Pause" : "Play"}</button>
+            <button className={"pb-action" + (shuffle ? " on" : "")} onClick={toggleShuffle}>Shuffle</button>
             <button className="pb-action" onClick={openTray}>All</button>
             <button className="pb-action" onClick={openPreview}>Save</button>
           </div>
@@ -795,6 +953,8 @@ export default function YoursAndOwlsSlideshow() {
             </div>
             <div className="pb-actions">
               <button className="pb-action" onClick={openTray}>View all</button>
+              <button className={"pb-action" + (shuffle ? " on" : "")} onClick={toggleShuffle}>Shuffle: {shuffle ? "on" : "off"}</button>
+              <button className="pb-action" onClick={startShow} title="Full screen, no buttons, slideshow on a loop — for a TV or projector">Event mode</button>
             </div>
           </div>
           <div className="pb-ctrl side right">
@@ -805,7 +965,7 @@ export default function YoursAndOwlsSlideshow() {
       )}
 
       {/* filter bar */}
-      <div ref={barRef} className={"pb-bar" + (compact ? " touch" : "")}>
+      {!show && <div ref={barRef} className={"pb-bar" + (compact ? " touch" : "")}>
         <span className="pb-title">{settings.title}</span>
         <div className="pb-pills">
           {pillCols.map((col, i) => (
@@ -822,9 +982,9 @@ export default function YoursAndOwlsSlideshow() {
           ))}
         </div>
         <span className="pb-count">{filters.length ? `${visible.length} / ${photos.length}` : photos.length}</span>
-      </div>
+      </div>}
 
-      {music.length > 0 && !compact && (
+      {music.length > 0 && !compact && !show && (
         <div className={"pb-music" + (musicPlaying ? " on" : "")}>
           <span className="pb-eq" aria-hidden="true"><i /><i /><i /></span>
           <span className="pb-track" title={trackTitle}>{trackTitle}</span>
@@ -833,10 +993,24 @@ export default function YoursAndOwlsSlideshow() {
         </div>
       )}
 
-      <button className={"pb-sound" + (soundOn ? "" : " muted")} title="Toggle sound"
-        onClick={() => { const on = !soundOn; setSoundOn(on); soundRef.current = on; if (on) { playTap(); startHum(); } }}>
-        {soundOn ? "🔊" : "🔇"}
-      </button>
+      {!show && (
+        <button className={"pb-sound" + (soundOn ? "" : " muted")} title="Toggle sound"
+          onClick={() => { const on = !soundOn; setSoundOn(on); soundRef.current = on; if (on) { playTap(); startHum(); } }}>
+          {soundOn ? "🔊" : "🔇"}
+        </button>
+      )}
+
+      {/* event mode: the click that starts it, and the way out */}
+      {show && showWaiting && loading === "off" && (
+        <button className="pb-showstart" onClick={startShow}>
+          <span className="pb-showtitle">{settings.title}</span>
+          <span className="pb-showgo">click anywhere to start the show</span>
+          <span className="pb-hint">esc to leave · arrows to skip · M music · S shuffle</span>
+        </button>
+      )}
+      {show && !showWaiting && (
+        <button className={"pb-showexit" + (showUi ? " on" : "")} onClick={exitShow}>Exit event mode ✕</button>
+      )}
 
       {/* every slide in the tray, laid out on a light table */}
       {tray && (
@@ -979,6 +1153,18 @@ const CSS = `
 .pb-nav:hover{background:rgba(255,255,255,.12);color:#fff}
 
 .pb-ctrl{position:absolute;z-index:5;display:flex;flex-direction:column;gap:10px}
+.pb-root.idle,.pb-root.idle *{cursor:none!important}
+.pb-proj.jammed{animation:pb-jam .5s ease-out both}
+@keyframes pb-jam{0%{translate:0 -3%}55%{translate:0 .8%}100%{translate:0 0}}
+.pb-showstart{position:absolute;inset:0;z-index:80;border:none;background:rgba(3,3,3,.72);color:#fff;cursor:pointer;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;font:inherit;backdrop-filter:blur(2px)}
+.pb-showtitle{font-size:clamp(22px,4vw,40px);letter-spacing:.12em}
+.pb-showgo{font-size:13px;letter-spacing:.2em;text-transform:uppercase;color:rgba(255,255,255,.7);animation:pb-pulse 2.4s ease-in-out infinite}
+@keyframes pb-pulse{50%{opacity:.35}}
+.pb-showexit{position:absolute;top:14px;right:16px;z-index:80;padding:6px 12px;border-radius:16px;border:1px solid rgba(255,255,255,.15);
+  background:rgba(0,0,0,.55);color:rgba(255,255,255,.75);font:inherit;font-size:12px;letter-spacing:.08em;cursor:pointer;
+  opacity:0;pointer-events:none;transition:opacity .3s}
+.pb-showexit.on{opacity:1;pointer-events:auto}
 .pb-ctrl.side{bottom:28px;gap:6px}
 .pb-ctrl.side.left{left:40px}
 .pb-ctrl.side.right{right:40px;align-items:flex-end}

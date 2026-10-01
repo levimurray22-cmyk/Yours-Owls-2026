@@ -10,5 +10,7 @@
   "wallPhoto": "",
   "musicVolume": 0.6,
   "musicAutoplay": true,
-  "musicShuffle": false
+  "musicShuffle": false,
+  "photographer": "",
+  "jams": true
 }

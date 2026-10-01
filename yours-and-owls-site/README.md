@@ -49,6 +49,8 @@ Edit **`settings.json`**:
 | `musicVolume` | Music volume, `0` to `1` |
 | `musicAutoplay` | `true`: music starts on the visitor's first click. `false`: only when they press play |
 | `musicShuffle` | `true` to shuffle the playlist on each visit |
+| `photographer` | Your name. It's saved inside every JPEG and TIFF people download (artist and copyright), so the credit travels with the photo. Leave `""` to leave it out |
+| `jams` | `true`: now and then a slide goes in upside down and gets put back the right way. `false` to switch it off |
 | `sounds.advance`, `sounds.hum` | Real projector sounds: put the audio in the `sounds` folder and write e.g. `"sounds/clunk.mp3"`. Leave `""` for the built-in sounds |
 
 ## First-time setup (once)
@@ -61,7 +63,19 @@ Edit **`settings.json`**:
 
 ## Sharing a slide
 
-Each slide has its own link, e.g. `…/#slide-022`. Use **Copy link** in the Download preview.
+**Copy link** in the Download preview gives a link like `…/s/022/`. Shared in Messages, Instagram, Facebook and so on,
+it shows that slide's photo and caption in the preview, and opens the site on that slide.
+
+## Event mode (for a TV or projector)
+
+Click **Event mode** (or press **E**), or open the site with `#show` on the end, e.g. `https://your-site.netlify.app/#show`.
+The buttons disappear, it goes full screen and the slideshow plays on a loop with the music.
+With the `#show` link, click once to start (browsers need a click before they'll play sound or go full screen).
+Move the mouse to see **Exit event mode**, or press **Esc**.
+
+## Keys
+
+**← →** change slide · **Space** play / pause · **S** shuffle · **E** event mode · **V** view all · **D** download · **M** music · **N** next track
 
 ## For developers
 

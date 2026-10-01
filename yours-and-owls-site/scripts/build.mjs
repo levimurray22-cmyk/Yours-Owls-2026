@@ -97,7 +97,7 @@ for (const s of scans) {
       window = findWindow(data, info.width, info.height, 4);
     } catch (e) {}
   }
-  slides.push({ file: s.file, slug, full, screen, small, tags: s.tags.sort(), caption, window, aspect });
+  slides.push({ file: s.file, slug, full, screen, small, tags: s.tags.sort(), caption, window, aspect, _src: sharp ? source : null });
 }
 
 // a scan whose window comes out very different from the other scans of the same shape of mount
@@ -118,9 +118,23 @@ for (const s of scans) {
     }
   }
 }
+// link-preview pictures: just the photo (out of its mount), for when a slide's link is shared
+fs.mkdirSync(path.join(OUT, "og"), { recursive: true });
 for (const s of slides) {
+  if (s._src) {
+    try {
+      const meta = await sharp(s._src).metadata();
+      let img = sharp(s._src);
+      if (s.window) {
+        const [x, y, w, h] = s.window;
+        img = img.extract({ left: Math.round(x * meta.width), top: Math.round(y * meta.height), width: Math.round(w * meta.width), height: Math.round(h * meta.height) });
+      }
+      await img.resize({ width: 1200, withoutEnlargement: true }).flatten({ background: "#111" }).jpeg({ quality: 82, mozjpeg: true }).toFile(path.join(OUT, "og", s.slug + ".jpg"));
+      s.og = "og/" + s.slug + ".jpg";
+    } catch (e) { console.warn("Couldn't make a link preview for", s.file, "—", e.message); }
+  }
   if (s.window) s.window = s.window.map((v) => Math.round(v * 10000) / 10000); else delete s.window;
-  delete s.aspect;
+  delete s.aspect; delete s._src;
 }
 
 // 4. sounds and wall photo, if any
@@ -180,9 +194,43 @@ const esc = (t) => String(t).replace(/&/g, "&amp;").replace(/"/g, "&quot;").repl
 const html = fs.readFileSync(path.join(ROOT, "index.html"), "utf8")
   .replaceAll("__TITLE__", esc(settings.title || "Slides"))
   .replaceAll("__DESCRIPTION__", esc(description))
-  .replaceAll("__IMAGE__", first ? esc((site ? site + "/" : "") + first.screen) : "")
+  .replaceAll("__IMAGE__", first ? esc((site ? site + "/" : "") + (first.og || first.screen)) : "")
   .replaceAll("__ICON__", first ? esc(first.small) : "");
 fs.writeFileSync(path.join(OUT, "index.html"), html);
+
+// a small page per slide (…/s/022/) so a shared link previews that slide's photo, then opens it
+const title = settings.title || "Slides";
+slides.forEach((s, i) => {
+  const name = s.caption || `Slide ${String(i + 1).padStart(3, "0")}`;
+  const img = (site ? site + "/" : "/") + (s.og || s.screen);
+  const target = "/#slide-" + encodeURIComponent(s.slug);
+  const page = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc(name)} · ${esc(title)}</title>
+<meta name="description" content="${esc(description)}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="${esc(title)}">
+<meta property="og:title" content="${esc(name)} · ${esc(title)}">
+<meta property="og:description" content="${esc(description)}">
+<meta property="og:image" content="${esc(img)}">
+${site ? `<meta property="og:url" content="${esc(site + "/s/" + encodeURIComponent(s.slug) + "/")}">\n` : ""}<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="${esc(img)}">
+<meta name="theme-color" content="#030303">
+<meta http-equiv="refresh" content="0; url=${esc(target)}">
+<style>html,body{margin:0;background:#030303;color:#888;font:13px monospace}a{color:#ccc}</style>
+</head>
+<body>
+<script>location.replace(${JSON.stringify(target)})</script>
+<p style="padding:20px"><a href="${esc(target)}">Open ${esc(name)}</a></p>
+</body>
+</html>
+`;
+  fs.mkdirSync(path.join(OUT, "s", s.slug), { recursive: true });
+  fs.writeFileSync(path.join(OUT, "s", s.slug, "index.html"), page);
+});
 
 console.log(`Built ${slides.length} slide${slides.length === 1 ? "" : "s"} and ${music.length} music track${music.length === 1 ? "" : "s"} into dist/`);
 for (const m of music) console.log(`  ♪ ${m.title}`);
