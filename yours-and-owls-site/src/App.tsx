@@ -6,14 +6,14 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "re
 // ═══════════════════════════════════════════════════════════
 
 type Settings = {
-  title: string; slideSeconds: number; transition: "cut" | "dissolve"; beam: number;
+  title: string; slideSeconds: number; beam: number;
   sounds: { advance: string; hum: string };
   wallPhoto: string;
   musicVolume: number; musicAutoplay: boolean; musicShuffle: boolean;
 };
 type Track = { src: string; title: string };
 const DEFAULT_SETTINGS: Settings = {
-  title: "YOURS & OWLS 2026", slideSeconds: 4, transition: "cut", beam: 1, sounds: { advance: "", hum: "" }, wallPhoto: "",
+  title: "YOURS & OWLS 2026", slideSeconds: 4, beam: 1, sounds: { advance: "", hum: "" }, wallPhoto: "",
   musicVolume: 0.6, musicAutoplay: true, musicShuffle: false,
 };
 // Used when a slide's photo window can't be found automatically (measured from a Kodachrome card mount)
@@ -190,11 +190,7 @@ export default function YoursAndOwlsSlideshow() {
   const [filters, setFilters] = useState<string[]>([]);
   const [curIdx, setCurIdx] = useState(0);
   const [shownId, setShownId] = useState<number | null>(null);
-  const [prevId, setPrevId] = useState<number | null>(null);     // the outgoing slide during a dissolve
-  const [dissolveKey, setDissolveKey] = useState(0);
   const [lit, setLit] = useState(false);
-  const [mode, setMode] = useState<"cut" | "dissolve">("cut");
-  useEffect(() => { if (data) setMode(data.settings.transition === "dissolve" ? "dissolve" : "cut"); }, [data]);
   const [playing, setPlaying] = useState(false);
   const [preview, setPreview] = useState(false);
   const [tray, setTray] = useState(false);
@@ -203,6 +199,11 @@ export default function YoursAndOwlsSlideshow() {
   const [soundOn, setSoundOn] = useState(true);
   const soundRef = useRef(true);
   soundRef.current = soundOn;
+  // while music plays, the projector's own sounds (hum, clunks, clicks) keep quiet
+  const [musicOn, setMusicOnState] = useState(false);
+  const musicOnRef = useRef(false);
+  const setMusicOn = (on: boolean) => { musicOnRef.current = on; setMusicOnState(on); };
+  const fxOn = () => soundRef.current && !musicOnRef.current;
 
   const [loading, setLoading] = useState<"on" | "fading" | "off">("on");
   const [progress, setProgress] = useState({ done: 0, total: 0 });
@@ -234,11 +235,12 @@ export default function YoursAndOwlsSlideshow() {
   const playBuffer = (buf: AudioBuffer, gain: number) => {
     try {
       const c = ctx(), s = c.createBufferSource(), g = c.createGain();
+      if (!fxOn()) return;
       s.buffer = buf; g.gain.value = gain; s.connect(g); g.connect(c.destination); s.start();
     } catch (e) {}
   };
   const noise = (len: number, gain: number, freq: number, q: number, pow = 4, at = 0) => {
-    if (!soundRef.current) return;
+    if (!fxOn()) return;
     try {
       const c = ctx(), now = c.currentTime + at;
       const n = Math.floor(c.sampleRate * len);
@@ -251,7 +253,7 @@ export default function YoursAndOwlsSlideshow() {
     } catch (e) {}
   };
   const tone = (from: number, to: number, dur: number, gain: number, at = 0) => {
-    if (!soundRef.current) return;
+    if (!fxOn()) return;
     try {
       const c = ctx(), now = c.currentTime + at;
       const o = c.createOscillator(), g = c.createGain();
@@ -265,7 +267,7 @@ export default function YoursAndOwlsSlideshow() {
   const playTap = () => noise(0.012, 0.22, 1800, 1.5);
   const playShutter = () => { if (!realSounds.current.advance) noise(0.02, 0.22, 1500, 1, 3); };
   const playClunk = (quiet = 1) => {
-    if (!soundRef.current) return;
+    if (!fxOn()) return;
     if (realSounds.current.advance) { playBuffer(realSounds.current.advance, 0.9 * quiet); return; }
     noise(0.012, 0.24 * quiet, 2600, 2); tone(120, 55, 0.14, 0.28 * quiet, 0.03); noise(0.03, 0.28 * quiet, 900, 0.9, 3, 0.03);
   };
@@ -284,11 +286,11 @@ export default function YoursAndOwlsSlideshow() {
       hum.current = { g };
       loadReal("advance");
       loadReal("hum").then(() => {
-        if (realSounds.current.hum) { begin(realSounds.current.hum, soundRef.current ? 0.35 : 0); return; }
+        if (realSounds.current.hum) { begin(realSounds.current.hum, fxOn() ? 0.35 : 0); return; }
         const n = c.sampleRate * 2, buf = c.createBuffer(1, n, c.sampleRate), d = buf.getChannelData(0);
         let last = 0;
         for (let i = 0; i < n; i++) { last = (last + 0.02 * (Math.random() * 2 - 1)) / 1.02; d[i] = last * 3.5; }
-        begin(buf, soundRef.current ? 0.05 : 0);
+        begin(buf, fxOn() ? 0.05 : 0);
       });
     } catch (e) {}
   };
@@ -299,8 +301,11 @@ export default function YoursAndOwlsSlideshow() {
   });
   useEffect(() => {
     const h = hum.current, c = actx.current;
-    if (h && c) h.g.gain.linearRampToValueAtTime(soundOn ? (realSounds.current.hum ? 0.35 : 0.05) : 0, c.currentTime + 0.3);
-  }, [soundOn]);
+    if (!h || !c) return;
+    const g = h.g.gain, now = c.currentTime;
+    g.cancelScheduledValues(now); g.setValueAtTime(g.value, now);
+    g.linearRampToValueAtTime(soundOn && !musicOn ? (realSounds.current.hum ? 0.35 : 0.05) : 0, now + (musicOn ? 0.8 : 1.2));
+  }, [soundOn, musicOn]);
 
   // ─── music: the tracks in the "music" folder, played in a loop ───
   const music = data ? data.music : [];
@@ -324,10 +329,20 @@ export default function YoursAndOwlsSlideshow() {
   const ensureAudio = () => {
     if (!audioRef.current) {
       const a = new Audio(); a.preload = "auto"; a.volume = 0;
-      a.addEventListener("ended", () => setTrackIdx((i) => (i + 1) % Math.max(1, musicRef.current.length)));
-      a.addEventListener("play", () => setMusicPlaying(true));
-      a.addEventListener("pause", () => setMusicPlaying(false));
-      a.addEventListener("error", () => { if (musicRef.current.length > 1) setTrackIdx((i) => (i + 1) % musicRef.current.length); });
+      a.addEventListener("ended", () => {
+        if (musicRef.current.length <= 1) { a.currentTime = 0; a.play().catch(() => {}); return; }   // one track: loop it
+        setTrackIdx((i) => (i + 1) % musicRef.current.length);
+      });
+      a.addEventListener("play", () => { setMusicPlaying(true); setMusicOn(true); });
+      // a pause that lasts (not just the gap between tracks) brings the projector sounds back
+      a.addEventListener("pause", () => {
+        setMusicPlaying(false);
+        setTimeout(() => { if (a.paused) { musicWanted.current = false; setMusicOn(false); } }, 400);
+      });
+      a.addEventListener("error", () => {
+        if (musicRef.current.length > 1) setTrackIdx((i) => (i + 1) % musicRef.current.length);
+        else { musicWanted.current = false; setMusicOn(false); }
+      });
       audioRef.current = a;
     }
     return audioRef.current;
@@ -337,15 +352,15 @@ export default function YoursAndOwlsSlideshow() {
   const playMusic = () => {
     if (!music.length) return;
     const a = ensureAudio();
-    musicWanted.current = true; musicStarted.current = true;
+    musicWanted.current = true; musicStarted.current = true; setMusicOn(true);
     if (!a.src) a.src = music[trackIdx % music.length].src;
     a.muted = !soundRef.current;
     const p = a.play();
-    if (p && p.catch) p.catch(() => { musicWanted.current = false; });
+    if (p && p.catch) p.catch(() => { musicWanted.current = false; setMusicOn(false); });
     fadeTo(musicVol(), 1200);
   };
   const pauseMusic = () => {
-    musicWanted.current = false;
+    musicWanted.current = false; setMusicOn(false);
     fadeTo(0, 500, () => audioRef.current && audioRef.current.pause());
   };
   const toggleMusic = () => { if (musicPlaying) pauseMusic(); else playMusic(); };
@@ -449,7 +464,7 @@ export default function YoursAndOwlsSlideshow() {
   { const all = ["ALL", ...people]; for (let i = 0; i < all.length; i += 5) pillCols.push(all.slice(i, i + 5)); }
 
   // ─── changing slides ──────────────────────────────────
-  // cut: lamp off, slide drops, lamp on.  dissolve: a second projector fades up over the first.
+  // lamp off, slide drops, lamp on
   const clearTimers = () => { timers.current.forEach(clearTimeout); timers.current = []; };
   const shownRef = useRef<number | null>(null);
   shownRef.current = shownId;
@@ -461,14 +476,6 @@ export default function YoursAndOwlsSlideshow() {
       busy.current = false;
       if (pending.current) { const d = pending.current; pending.current = 0; stepRef.current(d); }
     });
-    if (mode === "dissolve" && !intro && shownRef.current !== null) {
-      playClunk(0.55);
-      setPrevId(shownRef.current); setShownId(targetId); setDissolveKey((k) => k + 1); setLit(true);
-      at(1500, () => setPrevId(null));
-      release(700);
-      return true;
-    }
-    setPrevId(null);
     if (!intro) { playShutter(); setLit(false); }
     at(intro ? 120 : 240, () => playClunk());
     const on = intro ? 520 : 600;
@@ -553,11 +560,10 @@ export default function YoursAndOwlsSlideshow() {
   // slideshow (pauses while the preview or the tray view is open)
   useEffect(() => {
     if (!playing || preview || tray || shownId === null) return;
-    const t = setTimeout(() => step(1), settings.slideSeconds * 1000 + (mode === "dissolve" ? 900 : 0));
+    const t = setTimeout(() => step(1), settings.slideSeconds * 1000);
     return () => clearTimeout(t);
-  }, [playing, preview, tray, shownId, curIdx, visible, mode]);
+  }, [playing, preview, tray, shownId, curIdx, visible]);
   const togglePlay = () => { setPlaying((p) => !p); playTap(); };
-  const toggleMode = () => { setMode((m) => (m === "cut" ? "dissolve" : "cut")); playTap(); };
 
   const openPreview = () => { if (shownId === null) return; setPreview(true); playTap(); };
   const closePreview = () => { setPreview(false); playTap(); };
@@ -585,7 +591,6 @@ export default function YoursAndOwlsSlideshow() {
       if (e.key === " ") { e.preventDefault(); togglePlay(); }
       if (e.key === "d" || e.key === "D") openPreview();
       if (e.key === "v" || e.key === "V") openTray();
-      if (e.key === "f" || e.key === "F") toggleMode();
       if (e.key === "m" || e.key === "M") toggleMusic();
       if (e.key === "n" || e.key === "N") nextTrack();
     };
@@ -743,8 +748,7 @@ export default function YoursAndOwlsSlideshow() {
       {/* the projected picture(s) */}
       {shownPhoto && (
         <div className={"pb-pics" + (lit ? " lit" : "")}>
-          {prevId !== null && mode === "dissolve" && renderPicture(prevId, "out", "out-" + dissolveKey)}
-          {renderPicture(shownPhoto.id, prevId !== null && mode === "dissolve" ? "in" : "", "cur-" + shownPhoto.id + "-" + (prevId !== null ? dissolveKey : "c"))}
+          {renderPicture(shownPhoto.id, "", "cur-" + shownPhoto.id)}
         </div>
       )}
 
@@ -803,7 +807,6 @@ export default function YoursAndOwlsSlideshow() {
           </div>
           <div className="pb-row tight">
             <button className={"pb-action" + (playing ? " on" : "")} onClick={togglePlay}>{playing ? "Pause" : "Play"}</button>
-            <button className={"pb-action" + (mode === "dissolve" ? " on" : "")} onClick={toggleMode}>{mode === "dissolve" ? "Fade: on" : "Fade: off"}</button>
             <button className="pb-action" onClick={openTray}>All</button>
             <button className="pb-action" onClick={openPreview}>Save</button>
           </div>
@@ -828,9 +831,6 @@ export default function YoursAndOwlsSlideshow() {
             </div>
             <div className="pb-actions">
               <button className="pb-action" onClick={openTray}>View all</button>
-              <button className="pb-action" onClick={toggleMode}>
-                Change: <span className={mode === "cut" ? "pb-on" : "pb-off"}>Cut</span> / <span className={mode === "dissolve" ? "pb-on" : "pb-off"}>Dissolve</span>
-              </button>
             </div>
           </div>
           <div className="pb-ctrl side right">
@@ -984,13 +984,8 @@ const CSS = `
 .pb-pics.lit{opacity:1;transition:opacity .1s linear}
 .pb-proj{position:absolute;overflow:hidden;cursor:pointer;pointer-events:auto;
   box-shadow:0 0 2px 1px rgba(255,240,220,.22),0 0 26px 6px rgba(255,238,215,.07)}
-.pb-proj.out{animation:pb-out 1.4s ease-in-out both;pointer-events:none}
-.pb-proj.in{animation:pb-in 1.4s ease-in-out both}
-@keyframes pb-out{from{opacity:1}to{opacity:0}}
-@keyframes pb-in{from{opacity:0}to{opacity:1}}
 .pb-proj-in{position:absolute;inset:0;animation:pb-focus .6s ease-out both, pb-flicker 3.2s steps(1) infinite .7s}
 .pb-proj-in.soft{animation:pb-softfocus 1.9s ease-out both, pb-flicker 3.2s steps(1) infinite 2s}
-.pb-proj.in .pb-proj-in{animation:pb-flicker 3.2s steps(1) infinite 1.4s}
 .pb-proj-in img{position:absolute;max-width:none;display:block;filter:contrast(.9) saturate(.95) brightness(1.05) blur(.35px)}
 .pb-proj-missing{position:absolute;inset:0;background:radial-gradient(#7a0b4a,#2a0418)}
 .pb-speck{position:absolute;border-radius:50%;background:#000;filter:blur(.7px);pointer-events:none}

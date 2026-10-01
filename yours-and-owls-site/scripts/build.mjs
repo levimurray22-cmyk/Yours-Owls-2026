@@ -82,20 +82,44 @@ for (const extra of ["sounds", "wall"]) {
 // 5. the slide list, the app, and the page (with a link preview from the first slide)
 // the playlist: every audio file in "music", in file-name order.
 // The title is the file name without its number, e.g. "01 - Ocean Eyes.mp3" → "Ocean Eyes"
-const MUSIC = path.join(ROOT, "music");
-const AUDIO = /\.(mp3|m4a|aac|ogg|oga|opus|wav|flac)$/i;
+// Looks for the folder in a few likely places, and says in the deploy log what it found.
+const AUDIO = /\.(mp3|m4a|aac|ogg|oga|opus|wav|flac|webm)$/i;
+const NOT_PLAYABLE = /\.(aif|aiff|wma|m4p|alac|mid|midi)$/i;
+const musicDirs = [];
+const lookIn = (dir) => {
+  if (!fs.existsSync(dir)) return;
+  for (const e of fs.readdirSync(dir, { withFileTypes: true }))
+    if (e.isDirectory() && e.name.toLowerCase() === "music") musicDirs.push(path.join(dir, e.name));
+};
+lookIn(ROOT); lookIn(path.join(ROOT, "..")); lookIn(SLIDES);
+const audioFiles = [];
+const walk = (dir) => {
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (e.name.startsWith(".")) continue;
+    const abs = path.join(dir, e.name);
+    if (e.isDirectory()) walk(abs);
+    else if (AUDIO.test(e.name)) audioFiles.push(abs);
+    else if (NOT_PLAYABLE.test(e.name)) console.warn(`  ✗ ${e.name}: browsers can't play this format — export it as MP3 or M4A`);
+  }
+};
+for (const d of [...new Set(musicDirs)]) walk(d);
 const music = [];
-if (fs.existsSync(MUSIC)) {
+if (audioFiles.length) {
   fs.mkdirSync(path.join(OUT, "music"), { recursive: true });
-  const files = fs.readdirSync(MUSIC).filter((f) => AUDIO.test(f) && !f.startsWith("."))
-    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }));
-  for (const f of files) {
-    fs.copyFileSync(path.join(MUSIC, f), path.join(OUT, "music", f));
+  const seen = new Set();
+  audioFiles.sort((a, b) => path.basename(a).localeCompare(path.basename(b), undefined, { numeric: true, sensitivity: "base" }));
+  for (const abs of audioFiles) {
+    const f = path.basename(abs);
+    if (seen.has(f.toLowerCase())) continue;
+    seen.add(f.toLowerCase());
+    fs.copyFileSync(abs, path.join(OUT, "music", f));
     const name = f.replace(AUDIO, "");
     const title = name.replace(/^\s*\d+\s*([-–._)]\s*)?/, "").trim() || name;
     music.push({ src: "music/" + encodeURIComponent(f), title });
   }
 }
+if (!musicDirs.length) console.log(`No "music" folder found (looked in ${path.basename(ROOT)}/, the top of the repository, and slides/).`);
+else if (!music.length) console.log(`Found a music folder but no playable tracks in it: ${musicDirs.map((d) => path.relative(path.join(ROOT, ".."), d)).join(", ")}`);
 
 const { description = "", ...appSettings } = settings;
 fs.writeFileSync(path.join(OUT, "slides.json"), JSON.stringify({ settings: appSettings, slides, music }, null, 1));

@@ -33,6 +33,7 @@ Delete a file to take it out of the playlist. Only use music you have the rights
 
 Browsers don't allow sound until the visitor clicks or taps something, so the music starts on their first click.
 The speaker button mutes everything; the little player next to it pauses or skips tracks (keys: **M** play/pause, **N** next).
+While music is playing, the projector's own sounds (the hum, clicks and clunks) go quiet; pause the music and they come back.
 
 ## Settings
 
@@ -43,7 +44,6 @@ Edit **`settings.json`**:
 | `title` | Site name, top left and in browser tabs |
 | `description` | Text shown under the link when it's shared |
 | `slideSeconds` | Seconds per slide in the slideshow |
-| `transition` | `"cut"` (lamp blinks) or `"dissolve"` (slow fade) to start with |
 | `beam` | Strength of the light beam: `0` off, `1` normal |
 | `wallPhoto` | A real photo of a wall for the slides to be projected onto: make a folder called `wall`, put the photo in it, and write e.g. `"wall/wall.jpg"`. Leave `""` for the plain dark wall. Best: a plaster or painted wall shot in a dim room, straight on |
 | `musicVolume` | Music volume, `0` to `1` |
