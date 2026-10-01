@@ -1,4 +1,5 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { findWindow } from "./findWindow.mjs";
 
 // ═══════════════════════════════════════════════════════════
 // Nothing to edit here. Slides come from the "slides" folder and settings from
@@ -37,52 +38,15 @@ function loadImg(src: string): Promise<{ img: HTMLImageElement; cors: boolean }>
   return attempt(true).catch(() => attempt(false));
 }
 
-// Finds the photo window inside a slide mount: the big region that isn't mount-coloured.
+// Finds the photo window inside a slide mount (normally done by the build; this is the fallback)
 function detectWindow(img: HTMLImageElement): Win | null {
   try {
-    const S = 320, sc = S / Math.max(img.naturalWidth, img.naturalHeight);
+    const S = 640, sc = Math.min(1, S / Math.max(img.naturalWidth, img.naturalHeight));
     const w = Math.max(40, Math.round(img.naturalWidth * sc)), h = Math.max(40, Math.round(img.naturalHeight * sc));
     const c = document.createElement("canvas"); c.width = w; c.height = h;
     const g = c.getContext("2d")!;
     g.drawImage(img, 0, 0, w, h);
-    const d = g.getImageData(0, 0, w, h).data;
-    const lum = new Float32Array(w * h), sat = new Float32Array(w * h), alpha = new Uint8Array(w * h);
-    for (let i = 0; i < w * h; i++) {
-      const r = d[i * 4], gg = d[i * 4 + 1], b = d[i * 4 + 2];
-      lum[i] = (r + gg + b) / 3; sat[i] = Math.max(r, gg, b) - Math.min(r, gg, b); alpha[i] = d[i * 4 + 3];
-    }
-    const ring: number[] = [];
-    for (let y = Math.round(h * 0.05); y < h * 0.12; y++) for (let x = Math.round(w * 0.2); x < w * 0.8; x += 2) {
-      for (const yy of [y, h - 1 - y]) { const i = yy * w + x; if (alpha[i] > 200) ring.push(lum[i]); }
-    }
-    if (ring.length < 40) return null;
-    ring.sort((a, b) => a - b);
-    const mL = ring[Math.floor(ring.length / 2)];
-    const isMount = (i: number) => alpha[i] < 200 || (Math.abs(lum[i] - mL) < 38 && sat[i] < 60);
-    const longest = (len: number, get: (k: number) => boolean) => {
-      const gap = Math.max(2, Math.round(len * 0.03));
-      let best: [number, number] = [0, -1], start = -1, last = -1;
-      for (let k = 0; k < len; k++) {
-        if (get(k)) continue;
-        if (start < 0 || k - last - 1 > gap) start = k;
-        last = k;
-        if (last - start > best[1] - best[0]) best = [start, last];
-      }
-      return best;
-    };
-    const med = (v: number[]) => { const s = v.slice().sort((a, b) => a - b); return s[Math.floor(s.length / 2)]; };
-    const L: number[] = [], R: number[] = [], T: number[] = [], B: number[] = [];
-    for (let y = Math.round(h * 0.36); y < h * 0.64; y += 2) {
-      const [a, b] = longest(w, (x) => isMount(y * w + x)); if (b > a) { L.push(a); R.push(b); }
-    }
-    for (let x = Math.round(w * 0.36); x < w * 0.64; x += 2) {
-      const [a, b] = longest(h, (y) => isMount(y * w + x)); if (b > a) { T.push(a); B.push(b); }
-    }
-    if (L.length < 5 || T.length < 5) return null;
-    const x0 = med(L) / w, x1 = (med(R) + 1) / w, y0 = med(T) / h, y1 = (med(B) + 1) / h;
-    const ww = x1 - x0, hh = y1 - y0, asp = (ww * w) / (hh * h);
-    if (ww < 0.3 || hh < 0.2 || x0 < 0.02 || y0 < 0.02 || x1 > 0.98 || y1 > 0.98 || asp < 0.45 || asp > 2.3) return null;
-    return [x0 + 0.006, y0 + 0.006, ww - 0.012, hh - 0.012];
+    return findWindow(g.getImageData(0, 0, w, h).data, w, h, 4);
   } catch (e) {
     return null;
   }

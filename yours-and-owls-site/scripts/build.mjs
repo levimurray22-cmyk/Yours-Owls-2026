@@ -7,7 +7,11 @@ import path from "node:path";
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const SLIDES = path.join(ROOT, "slides");
 const OUT = path.join(ROOT, "dist");
-const IMG = /\.(png|jpe?g|webp)$/i;
+const IMG = /\.(png|jpe?g|webp|tiff?)$/i;
+const OTHER_IMG = /\.(heic|heif|raw|dng|nef|cr2|cr3|arw|psd|bmp|gif)$/i;
+const TIFF = /\.tiff?$/i;                 // browsers can't show TIFFs, so these get turned into PNGs on the site
+
+import { findWindow } from "../src/findWindow.mjs";
 
 let sharp = null;
 try { sharp = (await import("sharp")).default; } catch { console.warn("sharp not available — using full-size scans everywhere"); }
@@ -30,7 +34,11 @@ if (fs.existsSync(SLIDES)) {
     if (entry.name.startsWith(".")) continue;
     const abs = path.join(SLIDES, entry.name);
     if (entry.isDirectory()) {
-      for (const f of fs.readdirSync(abs)) if (IMG.test(f) && !f.startsWith(".")) add(path.join(abs, f), [entry.name, f], tagName(entry.name));
+      for (const f of fs.readdirSync(abs)) {
+        if (f.startsWith(".")) continue;
+        if (IMG.test(f)) add(path.join(abs, f), [entry.name, f], tagName(entry.name));
+        else if (OTHER_IMG.test(f)) console.warn(`  ✗ ${entry.name}/${f}: this format isn't supported — save it as PNG, JPEG or TIFF`);
+      }
     } else if (IMG.test(entry.name)) add(abs, [entry.name], null);
   }
 }
@@ -52,15 +60,25 @@ for (const s of scans) {
   while (used.has(slug)) slug = slugify(name) + "-" + n++;
   used.add(slug);
 
-  const dest = path.join(OUT, "slides", ...s.rel);
+  // a TIFF scan is published as a full-size PNG (lossless) with the same name
+  const rel = TIFF.test(s.file) ? [...s.rel.slice(0, -1), s.rel[s.rel.length - 1].replace(TIFF, ".png")] : s.rel;
+  const dest = path.join(OUT, "slides", ...rel);
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   // trim any empty margin (transparent, or the scanner's plain background) from around the mount
   let source = s.src;
   if (sharp) {
-    try { await sharp(s.src).rotate().trim({ threshold: 12 }).toFile(dest); source = dest; }
-    catch (e) { fs.copyFileSync(s.src, dest); }
-  } else fs.copyFileSync(s.src, dest);
-  const full = "slides/" + urlPath(...s.rel);
+    try {
+      let img = sharp(s.src).rotate().trim({ threshold: 12 });
+      if (TIFF.test(s.file)) img = img.toColourspace("srgb").png({ compressionLevel: 9 });   // 16-bit / CMYK scans → standard 8-bit
+      await img.toFile(dest); source = dest;
+    }
+    catch (e) {
+      if (TIFF.test(s.file)) { console.warn(`  ✗ ${s.file}: couldn't read this TIFF (${e.message}) — try saving it as PNG or JPEG`); used.delete(slug); continue; }
+      fs.copyFileSync(s.src, dest);
+    }
+  } else if (TIFF.test(s.file)) { console.warn(`  ✗ ${s.file}: skipped, TIFFs need sharp`); used.delete(slug); continue; }
+  else fs.copyFileSync(s.src, dest);
+  const full = "slides/" + urlPath(...rel);
   let screen = full, small = full;
   if (sharp) {
     try {
@@ -70,7 +88,39 @@ for (const s of scans) {
       small = "thumbs/small/" + slug + ".webp";
     } catch (e) { console.warn("Couldn't make smaller versions of", s.file, "—", e.message); }
   }
-  slides.push({ file: s.file, slug, full, screen, small, tags: s.tags.sort(), caption });
+  // where the photo sits inside the mount, so only the photo is projected
+  let window = null, aspect = 0;
+  if (sharp) {
+    try {
+      const { data, info } = await sharp(source).resize({ width: 640, height: 640, fit: "inside" }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+      aspect = info.width / info.height;
+      window = findWindow(data, info.width, info.height, 4);
+    } catch (e) {}
+  }
+  slides.push({ file: s.file, slug, full, screen, small, tags: s.tags.sort(), caption, window, aspect });
+}
+
+// a scan whose window comes out very different from the other scans of the same shape of mount
+// was probably misread — give it the window the others agree on
+{
+  const groups = new Map();
+  for (const s of slides) { const k = Math.round(s.aspect * 50); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(s); }
+  const med = (v) => { const a = v.slice().sort((x, y) => x - y); return a[Math.floor(a.length / 2)]; };
+  for (const list of groups.values()) {
+    const found = list.filter((s) => s.window);
+    if (found.length < 3) continue;
+    const m = [0, 1, 2, 3].map((i) => med(found.map((s) => s.window[i])));
+    const near = (w) => w && w.every((v, i) => Math.abs(v - m[i]) < 0.025);
+    if (found.filter((s) => near(s.window)).length < found.length / 2) continue;   // no clear agreement
+    for (const s of list) if (!near(s.window)) {
+      console.log(`  ⚠ ${s.file}: photo window ${s.window ? "looked unusual" : "wasn't found"} — using the same window as the other slides`);
+      s.window = m;
+    }
+  }
+}
+for (const s of slides) {
+  if (s.window) s.window = s.window.map((v) => Math.round(v * 10000) / 10000); else delete s.window;
+  delete s.aspect;
 }
 
 // 4. sounds and wall photo, if any

@@ -5,7 +5,7 @@
 Everything lives in the **`slides`** folder.
 
 - **Each folder is a tag.** `slides/north-stage` shows up as **NORTH STAGE** in the filters. Make a new folder to make a new tag.
-- **Add a slide:** put the scan (PNG, JPG or WebP) in a folder.
+- **Add a slide:** put the scan (PNG, JPEG, WebP or TIFF) in a folder. TIFFs are turned into full-quality PNGs for the site automatically.
 - **Two tags:** put the same file, with the same name, in both folders.
 - **No tag:** put the scan directly in `slides`.
 - **Caption:** add it to the file name after ` - ` (space, dash, space).
@@ -22,7 +22,7 @@ The scans can have a transparent or plain background — the empty margin around
 - **Delete:** click the scan → the **…** menu (top right) → **Delete file** → **Commit changes**.
 
 Netlify rebuilds the site by itself about a minute after each change.
-GitHub's website takes files up to 25 MB each.
+GitHub's website takes files up to 25 MB each. Full-size TIFF scans are often bigger than that; if one won't upload, save it as PNG (no quality lost, usually much smaller) or as a high-quality JPEG.
 
 ## Music
 
