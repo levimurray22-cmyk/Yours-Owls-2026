@@ -1,0 +1,17 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+# scans and thumbnails rarely change: let browsers keep them for a day
+[[headers]]
+  for = "/thumbs/*"
+  [headers.values]
+    Cache-Control = "public, max-age=86400"
+
+[[headers]]
+  for = "/slides.json"
+  [headers.values]
+    Cache-Control = "no-cache"

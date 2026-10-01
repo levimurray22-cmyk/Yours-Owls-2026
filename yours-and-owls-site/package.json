@@ -1,0 +1,20 @@
+{
+  "name": "yours-and-owls-slides",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:app": "esbuild src/main.tsx --bundle --minify --outfile=app/app.js --jsx=automatic --define:process.env.NODE_ENV=\\\"production\\\""
+  },
+  "dependencies": {
+    "sharp": "^0.33.5"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "esbuild": "^0.24.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.6.0"
+  }
+}
